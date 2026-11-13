@@ -149,9 +149,14 @@ Every other keyword argument goes to the driver's
 [`connect()`](https://github.com/gizmodata/hardcharger-adbc/tree/main/python) as it is:
 `tls_root_certs`, `tls_client_cert`, `tls_client_key`, `tls_server_name`, `subject_token`,
 `oauth_timeout`, `open_browser`, `share_sign_in`, `resume_timeout`, `settings`, `session_tag`,
-`query_tag`, `profile`, `db_kwargs` and `conn_kwargs`. In a URL, every argument can be a query
-parameter (`?auth_type=external`); percent-encode special characters in the user name and
-password.
+`query_tag`, `profile`, `db_kwargs` and `conn_kwargs`.
+
+In a URL, the connection options can be query parameters (`?auth_type=external`);
+percent-encode special characters in the user name and password. A URL is often configuration
+that someone other than the application's author supplies, so it can't do everything a keyword
+argument can: `open_browser` is `true` or `false` there (as a keyword argument it may name the
+command that opens the browser), and `session_id`, `settings`, `db_kwargs`, `conn_kwargs` and
+`uri` are keyword arguments only.
 
 A server whose certificate comes from your own certificate authority:
 

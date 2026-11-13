@@ -19,7 +19,9 @@ from [ibis-gizmosql](https://github.com/gizmodata/ibis-gizmosql) 1.1.1 with its 
   `adbc-driver-hardcharger` 2.4.9 (the Chargewire protocol over HTTP(S)). TLS is on by default;
   sign in with a password, an access token, a client certificate (mutual TLS) or the browser
   (`auth_type="external"`). Every other argument of the driver's `connect()` passes through
-  (`tls_root_certs`, `settings`, `session_tag`, ...).
+  (`tls_root_certs`, `settings`, `session_tag`, ...). A URL's query can set the connection
+  options only: it can't name a program to run (`open_browser` is true or false there), adopt
+  a session or pass driver options through; those are keyword arguments.
 - Expressions compile with Ibis 12.0's DuckDB compiler. Lambdas (`array.map()`,
   `array.filter()`) are written as `lambda x: ...`, the form DuckDB 2.0 takes.
 - In-memory data (pandas, Polars, PyArrow tables, record batch readers and datasets) is

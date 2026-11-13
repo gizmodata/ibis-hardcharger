@@ -6,7 +6,7 @@ Pure functions, so they are tested without a server (``tests/unit``).
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
-from urllib.parse import unquote
+from urllib.parse import parse_qsl, unquote
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -43,7 +43,8 @@ def _to_bool(name: str, value: Any) -> bool:
         return True
     if text in _FALSE:
         return False
-    raise ValueError(f"{name} must be true or false, not {value!r}")
+    # (the value is not repeated: it may be a secret pasted into the wrong option)
+    raise ValueError(f"{name} must be true or false")
 
 
 def _to_bool_or_text(name: str, value: Any) -> bool | str:
@@ -60,11 +61,11 @@ def _to_bool_or_text(name: str, value: Any) -> bool | str:
 
 def _to_seconds(name: str, value: Any) -> float:
     if isinstance(value, bool):
-        raise ValueError(f"{name} must be a number of seconds, not {value!r}")
+        raise ValueError(f"{name} must be a number of seconds")
     try:
         return float(value)
     except (TypeError, ValueError):
-        raise ValueError(f"{name} must be a number of seconds, not {value!r}") from None
+        raise ValueError(f"{name} must be a number of seconds") from None
 
 
 # How each argument that can arrive as URL text is converted.
@@ -77,6 +78,41 @@ _URL_CONVERTERS = {
     "oauth_timeout": _to_seconds,
     "resume_timeout": _to_seconds,
 }
+
+
+# What a URL's query may set. A URL is often configuration that someone other than the
+# application's author supplies, so it can choose among these and nothing else: it can't name a
+# program to run (the driver runs open_browser's text as a command during browser sign-in, so
+# from a URL it is true or false only), adopt another session, or pass driver options through.
+# Everything the driver's connect() takes remains available as a keyword argument, in code.
+_URL_QUERY_OPTIONS = frozenset(
+    {
+        "use_encryption",
+        "disable_certificate_verification",
+        "tls_skip_verify",
+        "tls_root_certs",
+        "tls_client_cert",
+        "tls_client_key",
+        "tls_server_name",
+        "auth_type",
+        "access_token",
+        "subject_token",
+        "oauth_timeout",
+        "open_browser",
+        "share_sign_in",
+        "resume_timeout",
+        "session_tag",
+        "query_tag",
+        "profile",
+        "user",
+        "username",
+        "password",
+        "database",
+        "catalog",
+        "schema",
+        "db_schema",
+    }
+)
 
 
 def build_uri(*, host: str, port: int | None = None, use_encryption: bool = True) -> str:
@@ -176,11 +212,19 @@ def kwargs_from_url(url: ParseResult, kwargs: Mapping[str, Any]) -> dict[str, An
 
     ``hardcharger://[user[:password]@]host[:port][/catalog[/schema]][?option=value&...]``.
     ``kwargs`` are the URL's query parameters merged with ``ibis.connect()``'s own keyword
-    arguments, as Ibis passes them. User name and password are percent-decoded.
+    arguments, as Ibis passes them. User name and password are percent-decoded. The query may
+    set the options in ``_URL_QUERY_OPTIONS`` only; keyword arguments are not limited.
     """
     if not url.hostname:
         raise ValueError(
             "a hardcharger:// URL needs a host: hardcharger://[user[:password]@]host[:port]"
+        )
+    in_query = {_URL_ALIASES.get(name, name) for name, _ in parse_qsl(url.query)}
+    refused = sorted(in_query - _URL_QUERY_OPTIONS)
+    if refused:
+        raise ValueError(
+            f"{', '.join(refused)} can't be set in a URL: pass it as a keyword argument to "
+            "ibis.connect() or connect()"
         )
     out: dict[str, Any] = {}
     for name, value in kwargs.items():
@@ -188,6 +232,8 @@ def kwargs_from_url(url: ParseResult, kwargs: Mapping[str, Any]) -> dict[str, An
         if name in out:
             raise ValueError(f"{name} is given more than once")
         converter = _URL_CONVERTERS.get(name)
+        if name == "open_browser" and name in in_query:
+            converter = _to_bool  # from a URL: a flag, never a command
         out[name] = converter(name, value) if converter is not None else value
 
     path = [unquote(part) for part in url.path.strip("/").split("/")] if url.path else []

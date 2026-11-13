@@ -187,9 +187,36 @@ class TestUrl:
             "tls_server_name": "db",
         }
 
-    def test_open_browser_may_be_a_command(self):
-        kwargs = from_url("hardcharger://db.example.com?open_browser=firefox")
+    def test_a_url_cannot_name_a_program_to_run(self):
+        """The driver runs open_browser's text as a command during browser sign-in, and URLs
+        are often configuration someone else supplies."""
+        with pytest.raises(ValueError, match="open_browser must be true or false"):
+            from_url("hardcharger://db.example.com?auth_type=external&open_browser=firefox")
+        with pytest.raises(ValueError, match="open_browser must be true or false"):
+            from_url("hardcharger://db.example.com?openBrowser=touch+/tmp/marker")
+        assert from_url("hardcharger://db.example.com?open_browser=false")["open_browser"] is False
+
+    def test_a_command_is_still_fine_as_a_keyword_argument(self):
+        kwargs = from_url("hardcharger://db.example.com?auth_type=external", open_browser="firefox")
         assert kwargs["open_browser"] == "firefox"
+
+    @pytest.mark.parametrize(
+        "option", ["session_id", "db_kwargs", "conn_kwargs", "settings", "autocommit", "uri", "x"]
+    )
+    def test_a_url_sets_only_the_listed_options(self, option):
+        with pytest.raises(ValueError, match=f"{option} can't be set in a URL"):
+            from_url(f"hardcharger://db.example.com?{option}=anything")
+
+    def test_an_option_error_never_repeats_the_value(self):
+        for url in (
+            "hardcharger://db.example.com?tls=tok_SECRET",
+            "hardcharger://db.example.com?open_browser=tok_SECRET",
+            "hardcharger://db.example.com?oauth_timeout=tok_SECRET",
+            "hardcharger://db.example.com?session_id=tok_SECRET",
+        ):
+            with pytest.raises(ValueError) as caught:
+                from_url(url)
+            assert "tok_SECRET" not in str(caught.value)
 
     def test_ibis_gizmosql_parameter_names_carry_over(self):
         kwargs = from_url(
