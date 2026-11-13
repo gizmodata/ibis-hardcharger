@@ -1,0 +1,146 @@
+[build-system]
+requires = ["setuptools>=84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ibis-hardcharger"
+# The one place the version lives: ibis_hardcharger.__version__ reads the installed metadata,
+# and CI checks that a release tag and CHANGELOG.md agree with it (scripts/check_version.py).
+version = "1.0.0"
+description = "Ibis backend for Hardcharger™, GizmoData's DuckDB 2.0 server, over the Chargewire protocol"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.11"  # adbc-driver-hardcharger and pyarrow 26 need 3.11
+authors = [{ name = "GizmoData", email = "support@gizmodata.com" }]
+keywords = [
+    "ibis",
+    "ibis-framework",
+    "hardcharger",
+    "chargewire",
+    "duckdb",
+    "arrow",
+    "adbc",
+    "dataframe",
+    "gizmodata",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
+# Floors are the latest releases when this package was created (2026-11-13). The CI job
+# "lowest versions" installs exactly these, so they stay true.
+dependencies = [
+    "ibis-framework>=12.0.0,<13",
+    # Ibis 12.0.0 builds DROP statements as sqlglot's Drop(this=...), which sqlglot 30.18.0
+    # (2026-09-03) replaced with Drop(tables=[...]): from there on drop_table() and
+    # drop_view() send "DROP TABLE" with no name, on every Ibis SQL backend. 30.17.0 is the
+    # newest sqlglot Ibis 12.0.0 works with. Lift the cap when Ibis supports a newer one.
+    "sqlglot>=30.17.0,<30.18",
+    "adbc-driver-hardcharger>=2.4.9,<3",
+    "pyarrow>=26.0.1",
+    "pyarrow-hotfix>=0.7",
+    # Reads client-side files (read_csv, read_parquet, read_json) before they are bulk-loaded.
+    "duckdb>=2.0.0",
+    # numpy 2.5 dropped Python 3.11; 2.4.6 is the newest numpy that still supports it.
+    "numpy>=2.4.6; python_version < '3.12'",
+    "numpy>=2.5.4; python_version >= '3.12'",
+    "pandas>=3.1.1",
+    "packaging>=26.3",
+    "rich>=15.0.0",
+]
+
+[project.optional-dependencies]
+delta = ["deltalake>=1.6.6"]
+dev = [
+    "pytest>=9.2.0",
+    "pytest-xdist>=3.8.0",
+    "pytest-snapshot>=0.9.0",
+    "pytest-mock>=3.17.0",
+    "pytest-timeout>=2.4.0",
+    "filelock>=4.2.10",
+    "hardcharger>=2.12.0",
+    # Inputs of Ibis's suite (create_table and memtable from Polars frames).
+    "polars>=2.1.0",
+    # The test CA, certificates and identity provider of the TLS and sign-in tests.
+    "cryptography>=50.0.2",
+    "pyjwt>=2.15.1",
+    "ruff>=0.17.5",
+    "mypy>=2.4.1",
+    "pandas-stubs>=3.1.0.261029",
+    "build>=1.6.1",
+    "twine>=7.0.0",
+]
+
+[project.entry-points."ibis.backends"]
+hardcharger = "ibis_hardcharger"
+
+[project.urls]
+Homepage = "https://github.com/gizmodata/ibis-hardcharger"
+Repository = "https://github.com/gizmodata/ibis-hardcharger"
+Changelog = "https://github.com/gizmodata/ibis-hardcharger/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/gizmodata/ibis-hardcharger#readme"
+
+[tool.setuptools]
+packages = ["ibis_hardcharger"]
+
+[tool.setuptools.package-data]
+ibis_hardcharger = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# The Ibis backend suite is run by star-importing its test modules, as Ibis wrote them.
+"tests/ibis_suite/test_*.py" = ["F401", "F403"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ibis_hardcharger"]
+
+[tool.mypy]
+python_version = "3.11"
+packages = ["ibis_hardcharger"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["adbc_driver_hardcharger.*", "adbc_driver_manager.*", "pyarrow.*", "duckdb.*", "deltalake.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
+xfail_strict = true
+markers = [
+    "integration: runs against a live Hardcharger server started by the test session; fails, never skips, when it can't start",
+    "hardcharger: Ibis backend-suite tests, run against the Hardcharger backend",
+    "backend: Ibis's marker for backend tests",
+    "notimpl: Ibis could implement this but has not yet",
+    "notyet: requires upstream changes",
+    "never: the backend will never support this",
+    "xfail_version: version-specific expected failure",
+    "tpch: TPC-H tests",
+    "tpcds: TPC-DS tests",
+    "benchmark: Ibis's marker for benchmarks",
+    "core: Ibis's marker for core tests",
+    "examples: Ibis's marker for tests of its example data",
+]

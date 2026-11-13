@@ -1,0 +1,34 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+
+# Packaging and build output
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+.venv-*/
+venv/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# The Ibis testing data (scripts/fetch_testing_data.sh)
+ci/ibis-testing-data/
+
+# Editors and OS
+.idea/
+.vscode/
+.DS_Store
+
+# Databases and logs a local run may leave
+*.duckdb
+*.wal
+*.log
+uv.lock
