@@ -396,7 +396,7 @@ cursor.
 ## Development and testing
 
 ```bash
-uv venv && uv pip install -e ".[dev,delta]"
+uv venv && source .venv/bin/activate && uv pip install -e ".[dev,delta]"
 scripts/fetch_testing_data.sh       # the Ibis project's test data, at a pinned commit
 ruff check . && ruff format --check . && mypy
 pytest tests/unit                   # no server
