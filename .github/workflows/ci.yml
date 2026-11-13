@@ -1,0 +1,333 @@
+name: CI
+
+# Every check, on pushes to main, pull requests and manual runs; and, on a vX.Y.Z tag, the gate
+# in front of the release: PyPI and the GitHub Release need every job below to have passed on
+# the tagged commit itself.
+#
+#   plan     whether this run tests anything (a push to main whose commit already passed doesn't)
+#   lint     ruff check, ruff format --check, mypy
+#   unit     tests/unit on Python 3.11 to 3.15 (no server)
+#   live     tests/integration and tests/ibis_suite (Ibis's own backend suite, TPC-H, TPC-DS)
+#            against a real hardcharger-server, on Python 3.11 to 3.15
+#   lowest   everything once more with the lowest versions pyproject.toml allows
+#   readme   every Python example in README.md, run as written
+#   build    sdist and wheel, twine check, the wheel installed and imported, version checks
+#   publish  PyPI, by Trusted Publishing with attestations (tags only, environment `release`)
+#   release  the GitHub Release, with the tag's CHANGELOG section (tags only)
+#
+# The live jobs FAIL when the server can't start; nothing skips for that (tests/conftest.py).
+# hardcharger-server is downloaded by the `hardcharger` package from the releases of
+# gizmodata/hardcharger with this workflow's own token.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    # Not evaluated for tags: a tag always runs everything. README.md is not here: it is the
+    # package's long description, and its examples are run.
+    paths-ignore: ["docs/**", "CHANGELOG.md"]
+  pull_request:
+    paths-ignore: ["docs/**", "CHANGELOG.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer run on the same branch cancels the older one; a tag's run is never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  # The download of hardcharger-server (tests/support/server.py keeps every other
+  # HARDCHARGER_* variable away from the server).
+  HARDCHARGER_INSTALL_TOKEN: ${{ github.token }}
+  UV_VERSION_PIN: "0.13.5"
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      actions: read
+    outputs:
+      test: ${{ steps.plan.outputs.test }}
+    steps:
+      # A push to main of a commit that already passed this workflow (on its pull request or
+      # branch, before a fast-forward) is not tested again. Tags, pull requests and manual runs
+      # always are.
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test=true
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+            passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success&per_page=1" --jq '.total_count')
+            if [ "$passed" -gt 0 ]; then
+              echo "::notice::$GITHUB_SHA already passed this workflow: not testing it again"
+              test=false
+            fi
+          fi
+          echo "test=$test" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: ruff and mypy
+    needs: plan
+    if: needs.plan.outputs.test == 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: ${{ env.UV_VERSION_PIN }}
+          enable-cache: true
+      - name: Install
+        id: install
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/bin/python -e ".[dev,delta]"
+      # Each gate runs even when an earlier one failed, so one run reports all of them.
+      - name: ruff check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: .venv/bin/ruff check .
+      - name: ruff format --check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: .venv/bin/ruff format --check .
+      - name: mypy
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: .venv/bin/mypy
+
+  unit:
+    name: unit tests (Python ${{ matrix.python }})
+    needs: plan
+    if: needs.plan.outputs.test == 'true'
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: ${{ env.UV_VERSION_PIN }}
+          enable-cache: true
+      - name: Install
+        run: |
+          uv venv .venv --python "${{ matrix.python }}"
+          uv pip install --python .venv/bin/python -e ".[dev,delta]"
+      - name: Unit tests
+        run: |
+          .venv/bin/python -m pytest tests/unit --junitxml=unit.xml
+          .venv/bin/python scripts/check_junit.py unit.xml --min-passed 50
+
+  live:
+    name: live tests (Python ${{ matrix.python }})
+    needs: plan
+    if: needs.plan.outputs.test == 'true'
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: ${{ env.UV_VERSION_PIN }}
+          enable-cache: true
+      - name: The Ibis testing data (a pinned commit)
+        uses: actions/cache@v5
+        with:
+          path: ci/ibis-testing-data
+          key: ibis-testing-data-${{ hashFiles('scripts/fetch_testing_data.sh') }}
+      - run: scripts/fetch_testing_data.sh
+      - name: Install
+        run: |
+          uv venv .venv --python "${{ matrix.python }}"
+          uv pip install --python .venv/bin/python -e ".[dev,delta]"
+          uv pip list --python .venv/bin/python | grep -E -i '^(ibis-framework|sqlglot|pyarrow|adbc-driver-hardcharger|hardcharger|duckdb|pandas|numpy|pytest) '
+      - name: Integration tests and Ibis's backend suite, against a live Hardcharger server
+        run: |
+          .venv/bin/python -m pytest tests/integration tests/ibis_suite -n 4 --dist loadgroup --junitxml=live.xml
+          .venv/bin/python scripts/check_junit.py live.xml --min-passed 2000
+
+  lowest:
+    name: lowest versions (Python 3.11)
+    needs: plan
+    if: needs.plan.outputs.test == 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: ${{ env.UV_VERSION_PIN }}
+          enable-cache: true
+      - name: The Ibis testing data (a pinned commit)
+        uses: actions/cache@v5
+        with:
+          path: ci/ibis-testing-data
+          key: ibis-testing-data-${{ hashFiles('scripts/fetch_testing_data.sh') }}
+      - run: scripts/fetch_testing_data.sh
+      # Every direct dependency at its floor in pyproject.toml, so the floors stay true.
+      - name: Install the lowest versions pyproject.toml allows
+        run: |
+          uv venv .venv --python 3.11
+          uv pip install --python .venv/bin/python --resolution lowest-direct -e ".[dev,delta]"
+          uv pip list --python .venv/bin/python
+      - name: Everything (unit, integration, Ibis's backend suite)
+        run: |
+          .venv/bin/python -m pytest -n 4 --dist loadgroup --junitxml=lowest.xml
+          .venv/bin/python scripts/check_junit.py lowest.xml --min-passed 2050
+
+  readme:
+    name: README examples
+    needs: plan
+    if: needs.plan.outputs.test == 'true'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: ${{ env.UV_VERSION_PIN }}
+          enable-cache: true
+      - name: Install
+        run: |
+          uv venv .venv --python 3.14
+          uv pip install --python .venv/bin/python -e ".[dev,delta]"
+      - name: Every Python block of README.md, against live servers
+        run: .venv/bin/python scripts/run_readme_examples.py
+
+  build:
+    name: sdist and wheel
+    needs: [lint, unit, live, lowest, readme]
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: ${{ env.UV_VERSION_PIN }}
+      - id: version
+        name: The version, its CHANGELOG section and (on a tag) the tag agree
+        run: |
+          set -euo pipefail
+          version=$(python scripts/check_version.py)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Build and check
+        run: |
+          set -euo pipefail
+          uv build --out-dir dist
+          rm -f dist/.gitignore  # uv's own; dist/ holds the two artifacts and nothing else
+          uvx twine check --strict dist/*
+          python scripts/check_version.py --dist dist
+      - name: The wheel installs, imports and registers the backend
+        run: |
+          set -euo pipefail
+          uv venv /tmp/wheel-venv --python 3.14
+          uv pip install --python /tmp/wheel-venv/bin/python dist/*.whl
+          cd /tmp
+          /tmp/wheel-venv/bin/python - "${{ steps.version.outputs.version }}" <<'PY'
+          import importlib.metadata
+          import sys
+
+          import ibis
+
+          import ibis_hardcharger
+
+          assert ibis_hardcharger.__version__ == sys.argv[1], ibis_hardcharger.__version__
+          (entry_point,) = (
+              ep for ep in importlib.metadata.entry_points(group="ibis.backends") if ep.name == "hardcharger"
+          )
+          assert entry_point.load().Backend is ibis_hardcharger.Backend
+          assert ibis.hardcharger.name == "hardcharger"
+          t = ibis.table(schema={"a": "int64"}, name="t")
+          print(ibis.hardcharger.compile(t.filter(t.a > 1)))
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  publish:
+    name: publish to PyPI
+    # Every test job by name, not only through `build`: nothing ships unless each passed on
+    # this commit.
+    needs: [lint, unit, live, lowest, readme, build]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04-arm
+    environment:
+      name: release
+      url: https://pypi.org/project/ibis-hardcharger/${{ needs.build.outputs.version }}/
+    permissions:
+      id-token: write # Trusted Publishing: PyPI's publisher names this repo, ci.yml and `release`
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          attestations: true
+      - name: PyPI serves the new version
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fsS "https://pypi.org/pypi/ibis-hardcharger/$VERSION/json" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::PyPI doesn't list ibis-hardcharger $VERSION"
+          exit 1
+
+  release:
+    name: GitHub Release
+    needs: [lint, unit, live, lowest, readme, build, publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - name: Release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          python scripts/check_version.py --dist dist --release-notes release_notes.md
+          cat release_notes.md
+      - uses: softprops/action-gh-release@v3
+        with:
+          name: v${{ needs.build.outputs.version }}
+          body_path: release_notes.md
+          files: dist/*

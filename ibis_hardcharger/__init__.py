@@ -73,6 +73,8 @@ _ORDERED_INGEST = {"adbc.chargewire.ingest.parts": "1"}
 _SESSION_RECONNECT = "adbc.chargewire.session.reconnect"
 
 _SQLSTATE_UNDEFINED_TABLE = "42P01"
+# A path the server reads itself: s3://, gs://, az://, https://, hf://, ... (not file://).
+_REMOTE_URL = re.compile(pattern=r"(?!file://)[A-Za-z][A-Za-z0-9+.-]*://")
 _SETTING_NAME = re.compile(pattern=r"[A-Za-z_][A-Za-z0-9_.]*")
 
 
@@ -1015,12 +1017,28 @@ class Backend(
 
     # ---- files on the client ------------------------------------------------------------------
 
-    def _read_local(self, *, table_name: str, source: sge.Select, batch_size: int) -> ir.Table:
-        """Read files on this machine and bulk-load them into a temporary table.
+    def _read(
+        self, *, table_name: str, paths: Sequence[str], source: sge.Select, batch_size: int
+    ) -> ir.Table:
+        """Make `source` (a SELECT from one of DuckDB's file readers) a temporary table.
 
-        The files are parsed here, by an in-process DuckDB (the server needs no access to
-        them), and streamed to the server as Arrow record batches of `batch_size` rows.
+        Files on this machine are parsed here, by an in-process DuckDB (the server needs no
+        access to them), and streamed to the server as Arrow record batches of `batch_size`
+        rows. URLs (``s3://``, ``https://``, ...) are the server's to read, with its own
+        credentials and network: they become a temporary view, read when it is queried.
         """
+        remote = [_REMOTE_URL.match(string=str(path)) is not None for path in paths]
+        if all(remote):
+            self._create_temp_view(table_name, source)
+            return self.table(table_name)
+        if any(remote):
+            raise ValueError(
+                "files on this machine and URLs can't be read together: read them "
+                "separately and combine the tables (ibis.union)"
+            )
+        return self._read_local(table_name=table_name, source=source, batch_size=batch_size)
+
+    def _read_local(self, *, table_name: str, source: sge.Select, batch_size: int) -> ir.Table:
         import duckdb
 
         local = duckdb.connect()
@@ -1045,6 +1063,8 @@ class Backend(
         """Load CSV files on this machine into a temporary table.
 
         The files are read here, by an in-process DuckDB, and bulk-loaded into the server.
+        URLs (``s3://``, ``https://``, ...) are read by the server instead, through a
+        temporary view.
 
         Parameters
         ----------
@@ -1069,7 +1089,7 @@ class Backend(
         ir.Table
             The just-loaded table
         """
-        paths = util.normalize_filenames(paths)
+        files: list[str] = util.normalize_filenames(paths)
 
         if not table_name:
             table_name = util.gen_name("read_csv")
@@ -1097,8 +1117,8 @@ class Backend(
         if types is not None:
             options.append(C.types.eq(make_struct_argument(obj=types)))
 
-        source = sg.select(STAR).from_(self.compiler.f.read_csv(paths, *options))
-        return self._read_local(table_name=table_name, source=source, batch_size=batch_size)
+        source = sg.select(STAR).from_(self.compiler.f.read_csv(files, *options))
+        return self._read(table_name=table_name, paths=files, source=source, batch_size=batch_size)
 
     def read_parquet(
         self,
@@ -1112,6 +1132,8 @@ class Backend(
         """Load Parquet files on this machine into a temporary table.
 
         The files are read here, by an in-process DuckDB, and bulk-loaded into the server.
+        URLs (``s3://``, ``https://``, ...) are read by the server instead, through a
+        temporary view.
 
         Parameters
         ----------
@@ -1132,11 +1154,11 @@ class Backend(
         ir.Table
             The just-loaded table
         """
-        paths = util.normalize_filenames(paths)
+        files: list[str] = util.normalize_filenames(paths)
         table_name = table_name or util.gen_name("read_parquet")
         options = [sg.to_identifier(key).eq(sge.convert(value=val)) for key, val in kwargs.items()]
-        source = sg.select(STAR).from_(self.compiler.f.read_parquet(paths, *options))
-        return self._read_local(table_name=table_name, source=source, batch_size=batch_size)
+        source = sg.select(STAR).from_(self.compiler.f.read_parquet(files, *options))
+        return self._read(table_name=table_name, paths=files, source=source, batch_size=batch_size)
 
     @util.experimental
     def read_json(
@@ -1152,6 +1174,8 @@ class Backend(
         """Load newline-delimited JSON files on this machine into a temporary table.
 
         The files are read here, by an in-process DuckDB, and bulk-loaded into the server.
+        URLs (``s3://``, ``https://``, ...) are read by the server instead, through a
+        temporary view.
 
         Parameters
         ----------
@@ -1191,10 +1215,9 @@ class Backend(
                 )
             )
 
-        source = sg.select(STAR).from_(
-            self.compiler.f.read_json_auto(util.normalize_filenames(paths), *options)
-        )
-        return self._read_local(table_name=table_name, source=source, batch_size=batch_size)
+        files: list[str] = util.normalize_filenames(paths)
+        source = sg.select(STAR).from_(self.compiler.f.read_json_auto(files, *options))
+        return self._read(table_name=table_name, paths=files, source=source, batch_size=batch_size)
 
     def read_delta(
         self,
@@ -1232,9 +1255,9 @@ class Backend(
                 "You can install it using pip:\n\npip install 'ibis-hardcharger[delta]'\n"
             ) from None
 
-        (path,) = util.normalize_filenames(path)
+        (location,) = util.normalize_filenames(path)
         table_name = table_name or util.gen_name("read_delta")
-        reader = DeltaTable(path, **kwargs).to_pyarrow_dataset().scanner().to_reader()
+        reader = DeltaTable(location, **kwargs).to_pyarrow_dataset().scanner().to_reader()
         self._ingest(table_name=table_name, data=reader, mode="replace", temporary=True)
         return self.table(table_name)
 

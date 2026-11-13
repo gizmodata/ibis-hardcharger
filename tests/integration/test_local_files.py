@@ -6,7 +6,10 @@ The first ten tests are ibis-gizmosql's tests/test_local_ingest.py, with its ass
 
 from __future__ import annotations
 
+import functools
+import http.server
 import json
+import threading
 
 import ibis
 import pandas as pd
@@ -265,6 +268,51 @@ def test_example_loader_reads_local_files(con, sample_csv, sample_parquet):
     parquet = con._load_example(path=sample_parquet, table_name="example_parquet")
     assert csv.count().execute() == 3
     assert parquet.columns == ("id", "name", "value")
+
+
+# ---- URLs are the server's to read ----------------------------------------------------------------
+
+
+@pytest.fixture
+def file_server(tmp_path):
+    """Serve a directory over HTTP on 127.0.0.1: files the Hardcharger server can fetch by URL
+    (with DuckDB's httpfs), and that this test process never hands to a reader as a path."""
+    directory = tmp_path / "served"
+    directory.mkdir()
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(directory))
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield directory, f"http://127.0.0.1:{server.server_address[1]}"
+    server.shutdown()
+    server.server_close()
+
+
+def test_a_url_is_read_by_the_server(con, file_server):
+    directory, base_url = file_server
+    pq.write_table(
+        table=pa.table({"id": [1, 2, 3], "name": ["a", "b", "c"]}),
+        where=directory / "remote.parquet",
+    )
+    (directory / "remote.csv").write_text("id,name\n4,d\n5,e\n")
+
+    t = con.read_parquet(f"{base_url}/remote.parquet", table_name="remote_parquet")
+    assert t.order_by("id").to_pyarrow().to_pydict() == {"id": [1, 2, 3], "name": ["a", "b", "c"]}
+    # A view on the server over the URL, not a table loaded from this machine.
+    with con._safe_raw_sql(
+        "SELECT sql FROM duckdb_views() WHERE view_name = 'remote_parquet'"
+    ) as cur:
+        [(definition,)] = cur.fetchall()
+    assert f"{base_url}/remote.parquet" in definition
+    assert not is_temporary(con=con, name="remote_parquet")  # no table of that name
+
+    csv = con.read_csv(f"{base_url}/remote.csv")
+    assert csv.order_by("id").to_pyarrow().to_pydict() == {"id": [4, 5], "name": ["d", "e"]}
+
+
+def test_files_and_urls_together_are_refused(con, sample_parquet):
+    with pytest.raises(ValueError, match="files on this machine and URLs can't be read together"):
+        con.read_parquet([sample_parquet, "https://example.com/data.parquet"])
 
 
 # ---- writing --------------------------------------------------------------------------------------

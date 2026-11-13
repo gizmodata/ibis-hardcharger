@@ -34,8 +34,21 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
-def start_server(**kwargs: Any) -> hardcharger.Server:
-    """Start a Hardcharger server with the test credentials; the caller stops it.
+def clean_environment() -> dict[str, str]:
+    """This process's environment without server options: only the installer's
+    ``HARDCHARGER_*`` variables stay."""
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("HARDCHARGER_") or name in _INSTALLER_VARIABLES
+    }
+
+
+def start_server(
+    *, username: str = SERVER_USERNAME, password: str = SERVER_PASSWORD, **kwargs: Any
+) -> hardcharger.Server:
+    """Start a Hardcharger server (with the test credentials unless others are given); the
+    caller stops it.
 
     Raises (it never skips) when the server can't start.
     """
@@ -49,8 +62,8 @@ def start_server(**kwargs: Any) -> hardcharger.Server:
         *kwargs.pop("extra_args", ()),
     ]
     server = hardcharger.Server(
-        username=SERVER_USERNAME,
-        password=SERVER_PASSWORD,
+        username=username,
+        password=password,
         binary=binary,
         version=version,
         extra_args=extra_args,
