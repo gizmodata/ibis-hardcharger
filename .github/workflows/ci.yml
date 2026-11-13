@@ -157,6 +157,17 @@ jobs:
           uv venv .venv --python "${{ matrix.python }}"
           uv pip install --python .venv/bin/python -e ".[dev,delta]"
           uv pip list --python .venv/bin/python | grep -E -i '^(ibis-framework|sqlglot|pyarrow|adbc-driver-hardcharger|hardcharger|duckdb|pandas|numpy|pytest) '
+      # The server binary comes from GitHub's release downloads, which answer 5xx now and then
+      # (a 504 failed a whole job on 2026-11-13). Fetch it once, with retries, before the tests:
+      # they then start from the cache, and still fail if no server can be had.
+      - name: Download the Hardcharger server
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if .venv/bin/python -m hardcharger download; then exit 0; fi
+            echo "download failed (attempt $attempt of 5)"
+            sleep $((attempt * 15))
+          done
+          exit 1
       - name: Integration tests and Ibis's backend suite, against a live Hardcharger server
         run: |
           .venv/bin/python -m pytest tests/integration tests/ibis_suite -n 4 --dist loadgroup --junitxml=live.xml
@@ -188,6 +199,17 @@ jobs:
           uv venv .venv --python 3.11
           uv pip install --python .venv/bin/python --resolution lowest-direct -e ".[dev,delta]"
           uv pip list --python .venv/bin/python
+      # The server binary comes from GitHub's release downloads, which answer 5xx now and then
+      # (a 504 failed a whole job on 2026-11-13). Fetch it once, with retries, before the tests:
+      # they then start from the cache, and still fail if no server can be had.
+      - name: Download the Hardcharger server
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if .venv/bin/python -m hardcharger download; then exit 0; fi
+            echo "download failed (attempt $attempt of 5)"
+            sleep $((attempt * 15))
+          done
+          exit 1
       - name: Everything (unit, integration, Ibis's backend suite)
         run: |
           .venv/bin/python -m pytest -n 4 --dist loadgroup --junitxml=lowest.xml
@@ -211,6 +233,17 @@ jobs:
         run: |
           uv venv .venv --python 3.14
           uv pip install --python .venv/bin/python -e ".[dev,delta]"
+      # The server binary comes from GitHub's release downloads, which answer 5xx now and then
+      # (a 504 failed a whole job on 2026-11-13). Fetch it once, with retries, before the tests:
+      # they then start from the cache, and still fail if no server can be had.
+      - name: Download the Hardcharger server
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if .venv/bin/python -m hardcharger download; then exit 0; fi
+            echo "download failed (attempt $attempt of 5)"
+            sleep $((attempt * 15))
+          done
+          exit 1
       - name: Every Python block of README.md, against live servers
         run: .venv/bin/python scripts/run_readme_examples.py
 
