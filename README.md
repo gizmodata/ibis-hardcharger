@@ -43,7 +43,7 @@ Results come back as Arrow.
 pip install ibis-hardcharger
 ```
 
-Python 3.11 to 3.15. It installs Ibis 12.0, `adbc-driver-hardcharger` 2.4.9 or newer, PyArrow,
+Python 3.11 to 3.15. It installs Ibis 12.0, `adbc-driver-hardcharger` 2.5.0 or newer, PyArrow,
 pandas and DuckDB (which reads client-side files). sqlglot stays at 30.17: Ibis 12.0.0 does not
 work with a newer one (its `drop_table()` sends `DROP TABLE` with no name from sqlglot 30.18 on).
 

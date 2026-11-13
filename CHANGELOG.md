@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-13
+
+### Changed
+
+- Requires `adbc-driver-hardcharger` 2.5.0 or newer (was 2.4.9). That driver applies a catalog and
+  a schema given together at connect in that order; earlier ones usually applied the schema first,
+  in the server's default catalog. `connect(database=..., schema=...)` and a `/catalog/schema` URL
+  now pass both to the driver, where 1.0.0 connected with neither and sent `USE` afterwards. The
+  session starts in the same place as before.
+
 ## [1.0.0] - 2026-11-13
 
 The first release: the [Ibis](https://ibis-project.org) backend for

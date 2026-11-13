@@ -225,20 +225,11 @@ class Backend(
                 previous.close()
         # The temporary tables behind in-memory tables belonged to the old session.
         self._memtables.clear()
-        # Given both a catalog and a schema, adbc-driver-hardcharger 2.4.9 (against
-        # Hardcharger 2.12.0) sets the schema first, in the server's default catalog, and
-        # then the catalog, which puts the session in that catalog's `main`: the schema is
-        # lost, or refused when the default catalog has none of that name. Each alone works,
-        # so the pair is set here, with USE.
-        start_in = None
-        if "catalog" in connect_kwargs and "db_schema" in connect_kwargs:
-            start_in = sg.table(
-                connect_kwargs.pop("db_schema"), db=connect_kwargs.pop("catalog"), quoted=True
-            )
+        # A catalog and a schema given together go to the driver as they are: it applies the
+        # catalog first (adbc-driver-hardcharger 2.5.0; earlier releases usually applied the
+        # schema first, in the server's default catalog).
         self.con = hardcharger.connect(**connect_kwargs)
         try:
-            if start_in is not None:
-                self._run(f"USE {start_in.sql(dialect=self.dialect)}")
             self._post_connect(extensions=extensions)
         except BaseException:
             self.con.close()

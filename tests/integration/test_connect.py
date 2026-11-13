@@ -141,12 +141,15 @@ def test_catalog_and_schema_in_another_catalog(connect):
     admin.attach(":memory:", name="start_catalog")
     try:
         admin.raw_sql('CREATE SCHEMA "start_catalog"."inner"').close()
-        con = connect(database="start_catalog", schema="inner")
-        try:
-            assert con.current_catalog == "start_catalog"
-            assert con.current_database == "inner"
-        finally:
-            con.disconnect()
+        # Many connects, not one: a driver before adbc-driver-hardcharger 2.5.0 applied the two
+        # options in a random order, so one connect in five or so found the schema by luck.
+        for _ in range(40):
+            con = connect(database="start_catalog", schema="inner")
+            try:
+                assert con.current_catalog == "start_catalog"
+                assert con.current_database == "inner"
+            finally:
+                con.disconnect()
         only_catalog = connect(database="start_catalog")
         try:
             assert only_catalog.current_catalog == "start_catalog"
