@@ -36,9 +36,13 @@ from ibis.backends import (
 from ibis.backends.sql import SQLBackend
 from ibis.backends.sql.compilers.base import STAR, AlterTable, C, RenameTable
 
-from ibis_hardcharger._connect import driver_kwargs, kwargs_from_url
 from ibis_hardcharger._compiler import Hardcharger, HardchargerCompiler, compiler
-from ibis_hardcharger.converter import HardchargerPandasData, HardchargerPyArrowData
+from ibis_hardcharger._connect import driver_kwargs, kwargs_from_url
+from ibis_hardcharger.converter import (
+    HardchargerPandasData,
+    HardchargerPyArrowData,
+    durations_for_intervals,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
@@ -213,8 +217,26 @@ class Backend(
         db_kwargs = dict(connect_kwargs.get("db_kwargs") or {})
         db_kwargs.setdefault(_SESSION_RECONNECT, "false")
         connect_kwargs["db_kwargs"] = db_kwargs
+        if (previous := getattr(self, "con", None)) is not None:
+            # reconnect(): the old connection may be one whose session the server lost.
+            with contextlib.suppress(Exception):
+                previous.close()
+        # The temporary tables behind in-memory tables belonged to the old session.
+        self._memtables.clear()
+        # Given both a catalog and a schema, adbc-driver-hardcharger 2.4.9 (against
+        # Hardcharger 2.12.0) sets the schema first, in the server's default catalog, and
+        # then the catalog, which puts the session in that catalog's `main`: the schema is
+        # lost, or refused when the default catalog has none of that name. Each alone works,
+        # so the pair is set here, with USE.
+        start_in = None
+        if "catalog" in connect_kwargs and "db_schema" in connect_kwargs:
+            start_in = sg.table(
+                connect_kwargs.pop("db_schema"), db=connect_kwargs.pop("catalog"), quoted=True
+            )
         self.con = hardcharger.connect(**connect_kwargs)
         try:
+            if start_in is not None:
+                self._run(f"USE {start_in.sql(dialect=self.dialect)}")
             self._post_connect(extensions=extensions)
         except BaseException:
             self.con.close()
@@ -291,7 +313,7 @@ class Backend(
 
     # ---- running SQL --------------------------------------------------------------------
 
-    def raw_sql(self, query: str | sg.Expression, **kwargs: Any) -> hardcharger.Cursor:
+    def raw_sql(self, query: str | sge.Expression, **kwargs: Any) -> hardcharger.Cursor:
         """Run a statement and return its open cursor; close it when done.
 
         Parameters
@@ -313,7 +335,7 @@ class Backend(
 
     @contextlib.contextmanager
     def _safe_raw_sql(
-        self, query: str | sg.Expression, **kwargs: Any
+        self, query: str | sge.Expression, **kwargs: Any
     ) -> Iterator[hardcharger.Cursor]:
         cur = self.raw_sql(query, **kwargs)
         try:
@@ -321,7 +343,7 @@ class Backend(
         finally:
             cur.close()
 
-    def _run(self, query: str | sg.Expression) -> None:
+    def _run(self, query: str | sge.Expression) -> None:
         """Run a statement that returns no rows."""
         with self._safe_raw_sql(query):
             pass
@@ -369,9 +391,7 @@ class Backend(
             result = cur.fetch_arrow_table()
         return self._filter_with_like(result[col].to_pylist(), like)
 
-    def list_databases(
-        self, *, like: str | None = None, catalog: str | None = None
-    ) -> list[str]:
+    def list_databases(self, *, like: str | None = None, catalog: str | None = None) -> list[str]:
         col = "schema_name"
         query = sg.select(sge.Distinct(expressions=[sg.column(col)])).from_(
             sg.table("schemata", db="information_schema")
@@ -388,17 +408,25 @@ class Backend(
         table_loc = self._to_sqlglot_table(database)
 
         catalog = table_loc.catalog or self.current_catalog
-        database = table_loc.db or self.current_database
+        schema = table_loc.db or self.current_database
+
+        # As Ibis's DuckDB backend: the tables and views of the schema, with the session's
+        # temporary ones of the same schema name (they all live in `temp.main`).
+        where = sg.and_(
+            C.table_catalog.isin(sge.convert(value=catalog), sge.convert(value="temp")),
+            C.table_schema.eq(sge.convert(value=schema)),
+        )
+        if database is None:
+            # Asked about "here": the session's temporary tables are here, whatever the
+            # current schema is called.
+            where = sg.or_(where, C.table_catalog.eq(sge.convert(value="temp")))
 
         col = "table_name"
         sql = (
             sg.select(col)
             .from_(sg.table("tables", db="information_schema"))
             .distinct()
-            .where(
-                C.table_catalog.isin(sge.convert(value=catalog), sge.convert(value="temp")),
-                C.table_schema.eq(sge.convert(value=database)),
-            )
+            .where(where)
             .sql(self.dialect)
         )
         with self._safe_raw_sql(sql) as cur:
@@ -626,7 +654,7 @@ class Backend(
             database = "main"
 
         table: ir.Table | None = None
-        query: sge.Expression | None = None
+        query: sge.Query | None = None
         reader: pa.RecordBatchReader | None = None
         if isinstance(obj, pa.RecordBatchReader):
             reader = obj
@@ -690,25 +718,37 @@ class Backend(
 
         return self.table(name, database=(catalog, database))
 
+    def _in_transaction(self) -> bool:
+        """Whether the caller has opened a transaction in this session (``raw_sql("BEGIN")``).
+
+        Inside one, every statement has the same transaction id; in autocommit each statement
+        gets its own. (Asking by trying ``BEGIN`` would abort the caller's transaction.)
+        """
+        ids = []
+        for _ in range(2):
+            with self._safe_raw_sql("SELECT txid_current()") as cur:
+                ids.append(cur.fetchone()[0])
+        return ids[0] == ids[1]
+
     def _swap_tables(self, *, new: sge.Table, old: sge.Table) -> None:
         """Replace table `old` with table `new`, in one transaction.
 
-        Sent as one request, so other sessions see the old table or the new one, and a
-        failure leaves the old one in place. Inside a transaction the caller opened with
-        ``raw_sql("BEGIN")`` the two statements join it instead.
+        Other sessions see the old table or the new one, and a failure leaves the old one in
+        place. (Two statements in one request are not one transaction by themselves.) Inside a
+        transaction the caller opened, the two statements join it.
         """
         dialect = self.dialect
         statements = [
             sge.Drop(kind="TABLE", this=old, exists=True).sql(dialect),
             AlterTable(this=new, actions=[RenameTable(this=old)]).sql(dialect),
         ]
+        if self._in_transaction():
+            self._run("; ".join(statements))
+            return
         try:
             self._run("; ".join(["BEGIN TRANSACTION", *statements, "COMMIT"]))
-        except hardcharger.Error as e:
-            if "cannot start a transaction within a transaction" in str(e):
-                self._run("; ".join(statements))
-                return
-            with contextlib.suppress(hardcharger.Error):
+        except BaseException:
+            with contextlib.suppress(Exception):
                 self._run("ROLLBACK")
             raise
 
@@ -794,9 +834,7 @@ class Backend(
         self._run(
             sge.Create(
                 kind="TABLE",
-                this=sge.Schema(
-                    this=this, expressions=schema.to_sqlglot_column_defs(self.dialect)
-                ),
+                this=sge.Schema(this=this, expressions=schema.to_sqlglot_column_defs(self.dialect)),
                 replace=True,
                 properties=sge.Properties(expressions=[sge.TemporaryProperty()]),
             )
@@ -909,6 +947,7 @@ class Backend(
         import pyarrow.types as pat
 
         table = self._to_arrow_table(expr, params=params, limit=limit, **kwargs)
+        table = durations_for_intervals(table=table, schema=expr.as_table().schema())
 
         df = pd.DataFrame(
             {
@@ -986,9 +1025,7 @@ class Backend(
 
         local = duckdb.connect()
         try:
-            reader = local.sql(source.sql(dialect="duckdb")).to_arrow_reader(
-                batch_size=batch_size
-            )
+            reader = local.sql(source.sql(dialect="duckdb")).to_arrow_reader(batch_size=batch_size)
             self._ingest(table_name=table_name, data=reader, mode="replace", temporary=True)
         finally:
             local.close()
@@ -1097,9 +1134,7 @@ class Backend(
         """
         paths = util.normalize_filenames(paths)
         table_name = table_name or util.gen_name("read_parquet")
-        options = [
-            sg.to_identifier(key).eq(sge.convert(value=val)) for key, val in kwargs.items()
-        ]
+        options = [sg.to_identifier(key).eq(sge.convert(value=val)) for key, val in kwargs.items()]
         source = sg.select(STAR).from_(self.compiler.f.read_parquet(paths, *options))
         return self._read_local(table_name=table_name, source=source, batch_size=batch_size)
 
@@ -1140,9 +1175,7 @@ class Backend(
         if not table_name:
             table_name = util.gen_name("read_json")
 
-        options = [
-            sg.to_identifier(key).eq(sge.convert(value=val)) for key, val in kwargs.items()
-        ]
+        options = [sg.to_identifier(key).eq(sge.convert(value=val)) for key, val in kwargs.items()]
         if columns:
             options.append(
                 sg.to_identifier("columns").eq(

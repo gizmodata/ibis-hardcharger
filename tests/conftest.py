@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import re
 import time
 from pathlib import Path
@@ -32,24 +31,12 @@ import hardcharger
 import pytest
 from filelock import FileLock
 
+from tests.support.server import start_server
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-SERVER_USERNAME = "ibis"
-SERVER_PASSWORD = "ibis_password"
-
-# HARDCHARGER_* variables the ``hardcharger`` package's installer reads; all others are
-# server options, and are removed from the server's environment.
-_INSTALLER_VARIABLES = frozenset(
-    {
-        "HARDCHARGER_INSTALL_TOKEN",
-        "HARDCHARGER_CACHE_DIR",
-        "HARDCHARGER_RELEASE_API_URL",
-        "HARDCHARGER_RELEASE_REPO",
-    }
-)
 
 # Why a test may be skipped. A skip for any other reason fails the run: a skipped test is an
 # unverified one, so each reason is listed here with what it means.
@@ -66,27 +53,6 @@ ALLOWED_SKIP_REASONS = (
     r"^unconditional skip$",  # test_close_connection
     r"^risingwave$",  # test_semi_join_topk
 )
-
-
-def start_server(**kwargs: Any) -> hardcharger.Server:
-    """Start a Hardcharger server with the test credentials; the caller stops it.
-
-    Raises (it never skips) when the server can't start.
-    """
-    binary = os.environ.get("IBIS_HARDCHARGER_TEST_SERVER_BINARY") or None
-    version = os.environ.get("IBIS_HARDCHARGER_TEST_SERVER_VERSION") or None
-    server = hardcharger.Server(
-        username=SERVER_USERNAME,
-        password=SERVER_PASSWORD,
-        binary=binary,
-        version=version,
-        **kwargs,
-    )
-    with pytest.MonkeyPatch.context() as patch:
-        for name in list(os.environ):
-            if name.startswith("HARDCHARGER_") and name not in _INSTALLER_VARIABLES:
-                patch.delenv(name=name)
-        return server.start()
 
 
 @pytest.fixture(scope="session")
@@ -147,6 +113,15 @@ def _address(*, server: hardcharger.Server) -> dict[str, Any]:
         "username": server.username,
         "password": server.password,
     }
+
+
+def pytest_configure(config) -> None:
+    """Ibis's suite marks tests with the name of every backend Ibis knows; --strict-markers
+    wants each registered."""
+    from ibis.backends import _get_backend_names
+
+    for name in sorted(_get_backend_names()):
+        config.addinivalue_line("markers", f"{name}: Ibis's marker for tests of its {name} backend")
 
 
 def pytest_collection_modifyitems(config, items) -> None:

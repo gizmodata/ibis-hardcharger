@@ -29,13 +29,14 @@ import adbc_driver_manager
 import ibis
 import ibis.backends.sql.compilers as sc
 import ibis.common.exceptions as exc
-import ibis_hardcharger
 import pytest
 import sqlglot as sg
 from ibis import util
 from ibis.backends.conftest import TEST_TABLES
 from ibis.backends.conftest import pytest_runtest_call as _ibis_pytest_runtest_call
 from ibis.backends.tests.base import BackendTest
+
+import ibis_hardcharger
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -364,6 +365,10 @@ NOT_INHERITED = {
     # create_table() streams a PyArrow RecordBatchReader into the table (the [pyarrow_rbr]
     # case; Ibis's DuckDB backend refuses a reader).
     "test_create_table_in_memory",
+    # An INTERVAL result of fixed length (no months) comes back as a duration / pandas
+    # Timedelta, as its Ibis type says; Ibis's DuckDB backend returns DateOffsets.
+    "test_interval_literal",
+    "test_temporal_binop",
 }
 
 _NO_PYTHON_UDFS = (
@@ -455,9 +460,7 @@ def pytest_runtest_call(item) -> None:
     if not _in_suite(item=item):
         return
     keys = [
-        key
-        for key in item.funcargs
-        if key.endswith(("backend", "backend_name", "backend_no_data"))
+        key for key in item.funcargs if key.endswith(("backend", "backend_name", "backend_no_data"))
     ]
     stashed = {key: item.funcargs.pop(key) for key in keys[1:]}
     try:

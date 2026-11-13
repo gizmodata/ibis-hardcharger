@@ -121,8 +121,16 @@ warn_redundant_casts = true
 check_untyped_defs = true
 no_implicit_optional = true
 
+# Ibis ships no type information (no py.typed), nor do the driver and PyArrow.
 [[tool.mypy.overrides]]
-module = ["adbc_driver_hardcharger.*", "adbc_driver_manager.*", "pyarrow.*", "duckdb.*", "deltalake.*"]
+module = [
+    "ibis.*",
+    "adbc_driver_hardcharger.*",
+    "adbc_driver_manager.*",
+    "pyarrow.*",
+    "duckdb.*",
+    "deltalake.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
@@ -132,7 +140,6 @@ addopts = "-ra --strict-markers"
 xfail_strict = true
 markers = [
     "integration: runs against a live Hardcharger server started by the test session; fails, never skips, when it can't start",
-    "hardcharger: Ibis backend-suite tests, run against the Hardcharger backend",
     "backend: Ibis's marker for backend tests",
     "notimpl: Ibis could implement this but has not yet",
     "notyet: requires upstream changes",
