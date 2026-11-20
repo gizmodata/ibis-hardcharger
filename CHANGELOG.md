@@ -7,8 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-20
+
+### Security
+
+- **A URL can no longer load this machine's connection profile or read its files.** `profile`,
+  `tls_root_certs`, `tls_client_cert` and `tls_client_key` are refused in an
+  `ibis.connect("hardcharger://...")` URL's query. With `profile` a URL naming its own host had the
+  driver send the profile's stored user name and password there; with the three TLS options a URL
+  holding no secret signed in with the machine's own client certificate. They remain keyword
+  arguments (`ibis.connect(url, tls_client_cert=...)`, `ibis.hardcharger.connect(profile=...)`).
+- **A URL can no longer join a shared browser sign-in.** `share_sign_in` in a URL takes only
+  `false`; `true` or a name is a keyword argument.
+- A URL's query may set exactly: `use_encryption` (`tls`), `disable_certificate_verification`,
+  `tls_skip_verify`, `tls_server_name`, `auth_type`, `access_token`, `subject_token`,
+  `oauth_timeout`, `open_browser` (true or false), `share_sign_in` (false), `resume_timeout`,
+  `session_tag`, `query_tag`, `user`/`username`, `password`, `database`/`catalog` and
+  `schema`/`db_schema`. Refusals name the option, never the value. Live tests reproduce the
+  client-certificate and profile cases.
+
 ### Changed
 
+- **Breaking for URLs that used `profile=`, `tls_root_certs=`, `tls_client_cert=`,
+  `tls_client_key=` or `share_sign_in=true|<name>`** (see Security): pass them as keyword
+  arguments.
 - Requires `adbc-driver-hardcharger` 2.7.0 or newer (was 2.5.0), and uses its option names, which
   follow the ADBC driver style guide: `hardcharger.ingest.parts` for ordered bulk loads and
   `hardcharger.session.reconnect` (was `adbc.chargewire.*`), taken from the driver's

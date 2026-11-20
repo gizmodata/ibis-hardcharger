@@ -207,6 +207,61 @@ class TestUrl:
         with pytest.raises(ValueError, match=f"{option} can't be set in a URL"):
             from_url(f"hardcharger://db.example.com?{option}=anything")
 
+    @pytest.mark.parametrize(
+        "option", ["profile", "tls_root_certs", "tls_client_cert", "tls_client_key"]
+    )
+    def test_a_url_cannot_use_this_machines_profile_or_files(self, option):
+        for url in (
+            f"hardcharger://db.example.com?{option}=/home/app/SECRET_PATH",
+            f"hardcharger://elsewhere.example:443/?auth_type=mtls&{option}=SECRET_PATH",
+        ):
+            with pytest.raises(ValueError, match=f"{option} can't be set in a URL") as caught:
+                from_url(url)
+            assert "SECRET_PATH" not in str(caught.value)
+
+    @pytest.mark.parametrize(
+        "option", ["profile", "tls_root_certs", "tls_client_cert", "tls_client_key"]
+    )
+    def test_the_applications_code_still_uses_them(self, option):
+        kwargs = from_url("hardcharger://db.example.com", **{option: "/etc/hardcharger/x"})
+        assert kwargs[option] == "/etc/hardcharger/x"
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "finance-team", "SECRET_NAME"])
+    def test_a_url_cannot_share_a_sign_in(self, value):
+        with pytest.raises(ValueError, match="share_sign_in can only be false") as caught:
+            from_url(f"hardcharger://db.example.com?auth_type=external&share_sign_in={value}")
+        assert "SECRET_NAME" not in str(caught.value)
+
+    def test_a_url_may_turn_sign_in_sharing_off_and_code_may_share(self):
+        assert from_url("hardcharger://h?share_sign_in=false")["share_sign_in"] is False
+        assert from_url("hardcharger://h", share_sign_in="team")["share_sign_in"] == "team"
+
+    def test_the_url_options_are_exactly_these(self):
+        from ibis_hardcharger._connect import _URL_QUERY_OPTIONS
+
+        assert _URL_QUERY_OPTIONS == {
+            "use_encryption",
+            "disable_certificate_verification",
+            "tls_skip_verify",
+            "tls_server_name",
+            "auth_type",
+            "access_token",
+            "subject_token",
+            "oauth_timeout",
+            "open_browser",
+            "share_sign_in",
+            "resume_timeout",
+            "session_tag",
+            "query_tag",
+            "user",
+            "username",
+            "password",
+            "database",
+            "catalog",
+            "schema",
+            "db_schema",
+        }
+
     def test_an_option_error_never_repeats_the_value(self):
         for url in (
             "hardcharger://db.example.com?tls=tok_SECRET",

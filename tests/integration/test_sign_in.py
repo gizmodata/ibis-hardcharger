@@ -168,6 +168,64 @@ def test_an_unknown_certificate_identity_is_refused(tls_server, certs):
         )
 
 
+def test_a_url_cannot_sign_in_with_this_machines_client_certificate(tls_server, certs):
+    """The certificate files are on the machine that runs the application, not the URL's
+    author's: before 1.1.0 a URL holding no secret signed in with them (as an admin here)."""
+    base = f"hardcharger://{tls_server.host}:{tls_server.port}"
+    for query in (
+        f"?auth_type=client_certificate&tls_root_certs={certs['ca']}"
+        f"&tls_client_cert={certs['admin']}&tls_client_key={certs['admin-key']}",
+        f"?auth_type=mtls&tls_client_cert={certs['admin']}&tls_client_key={certs['admin-key']}",
+        f"?tls_root_certs={certs['ca']}",
+    ):
+        with pytest.raises(ValueError, match="can't be set in a URL .it reads a file"):
+            ibis.connect(base + query)
+    # the twin: the application's own code still names them
+    con = ibis.connect(
+        base + "?auth_type=client_certificate",
+        tls_root_certs=str(certs["ca"]),
+        tls_client_cert=str(certs["admin"]),
+        tls_client_key=str(certs["admin-key"]),
+    )
+    try:
+        assert current_user(con=con).lower() == ADMIN_CERT_IDENTITY
+    finally:
+        con.disconnect()
+
+
+def test_a_url_cannot_use_this_machines_connection_profile(
+    tls_server, certs, tmp_path, monkeypatch
+):
+    """A URL naming its own host and the machine's profile would have the driver send the
+    profile's password to that host; the application's code still uses the profile."""
+    drivers, profiles = tmp_path / "drivers", tmp_path / "profiles"
+    profiles.mkdir()
+    subprocess.run(
+        [sys.executable, "-m", "adbc_driver_hardcharger.manifest", "--dir", str(drivers)],
+        check=True,
+        capture_output=True,
+    )
+    monkeypatch.setenv("ADBC_DRIVER_PATH", str(drivers))
+    monkeypatch.setenv("ADBC_PROFILE_PATH", str(profiles))
+    (profiles / "prod.toml").write_text(
+        'profile_version = 1\ndriver = "hardcharger"\n\n[Options]\n'
+        f'uri = "hardcharger://{tls_server.host}:{tls_server.port}"\n'
+        f'username = "{SERVER_USERNAME}"\npassword = "{SERVER_PASSWORD}"\n'
+        f'"hardcharger.tls.skip_verify" = "true"\n'
+    )
+    for url in (
+        "hardcharger://elsewhere.example:443/?profile=prod",
+        f"hardcharger://elsewhere.example:443/?profile={profiles / 'prod.toml'}",
+    ):
+        with pytest.raises(ValueError, match="profile can't be set in a URL .it loads"):
+            ibis.connect(url)
+    con = ibis.hardcharger.connect(profile="prod")
+    try:
+        assert current_user(con=con) == SERVER_USERNAME
+    finally:
+        con.disconnect()
+
+
 # ---- browser sign-in ------------------------------------------------------------------------------
 
 
