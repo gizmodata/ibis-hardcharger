@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Requires `adbc-driver-hardcharger` 2.7.0 or newer (was 2.5.0), and uses its option names, which
+  follow the ADBC driver style guide: `hardcharger.ingest.parts` for ordered bulk loads and
+  `hardcharger.session.reconnect` (was `adbc.chargewire.*`), taken from the driver's
+  `StatementOptions` and `DatabaseOptions`. The driver prints no deprecation line for them.
+
+### Fixed
+
+- `connect(db_kwargs=...)` with session replacement under any name the driver reads
+  (`hardcharger.session.reconnect`, `chargewire.session.reconnect`,
+  `adbc.chargewire.session.reconnect`, `adbc.warp.session.reconnect`) is sent as given, without
+  Ibis's default `"false"` added beside it under another name, where the driver would have taken
+  one of the two values.
+
 ## [1.0.1] - 2026-11-13
 
 ### Changed

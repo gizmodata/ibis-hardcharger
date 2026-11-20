@@ -23,6 +23,7 @@ import ibis.expr.schema as sch
 import ibis.expr.types as ir
 import sqlglot as sg
 import sqlglot.expressions as sge
+from adbc_driver_hardcharger import DatabaseOptions, StatementOptions
 from adbc_driver_hardcharger import dbapi as hardcharger
 from ibis import util
 from ibis.backends import (
@@ -65,12 +66,23 @@ INGEST_BATCH_ROWS = 122_880
 # One ordered stream per bulk load, so a table keeps the order of the data it was loaded
 # from. (The driver's default sends a load of two batches or more as up to 8 parallel parts,
 # whose rows land in no defined order.)
-_ORDERED_INGEST = {"adbc.chargewire.ingest.parts": "1"}
+_ORDERED_INGEST = {StatementOptions.INGEST_PARTS.value: "1"}
 
 # Ibis keeps state in the server session (the UTC time zone it sets, temporary tables behind
 # memtables, read_*() and cache()), and a session the driver opens to replace a lost one has
 # none of it. So a lost session is an error here, and Backend.reconnect() starts afresh.
-_SESSION_RECONNECT = "adbc.chargewire.session.reconnect"
+_SESSION_RECONNECT = DatabaseOptions.SESSION_RECONNECT.value
+# Every name the driver (adbc-driver-hardcharger 2.7.0) reads that option under: a caller who
+# sets it under any of them decides, and the default is not added under a second name (the
+# driver would take one of the two values, not necessarily the caller's).
+_SESSION_RECONNECT_NAMES = frozenset(
+    {
+        _SESSION_RECONNECT,
+        "chargewire.session.reconnect",
+        "adbc.chargewire.session.reconnect",
+        "adbc.warp.session.reconnect",
+    }
+)
 
 _SQLSTATE_UNDEFINED_TABLE = "42P01"
 # A path the server reads itself: s3://, gs://, az://, https://, hf://, ... (not file://).
@@ -217,7 +229,8 @@ class Backend(
             extra=kwargs,
         )
         db_kwargs = dict(connect_kwargs.get("db_kwargs") or {})
-        db_kwargs.setdefault(_SESSION_RECONNECT, "false")
+        if not _SESSION_RECONNECT_NAMES.intersection(db_kwargs):
+            db_kwargs[_SESSION_RECONNECT] = "false"
         connect_kwargs["db_kwargs"] = db_kwargs
         if (previous := getattr(self, "con", None)) is not None:
             # reconnect(): the old connection may be one whose session the server lost.
@@ -248,7 +261,7 @@ class Backend(
 
         The connection must be in autocommit mode (the driver's default). Its session's
         time zone is set to UTC. Open it with
-        ``db_kwargs={"adbc.chargewire.session.reconnect": "false"}`` so that a session the
+        ``db_kwargs={"hardcharger.session.reconnect": "false"}`` so that a session the
         server loses is an error instead of a new session without Ibis's temporary tables.
 
         Parameters

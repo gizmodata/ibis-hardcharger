@@ -89,7 +89,7 @@ def test_a_lost_session_is_an_error_until_reconnect(evicting_server, watcher):
 def test_why_the_drivers_session_replacement_is_off(evicting_server, watcher):
     """With the driver's default, the statement after the failed one runs in a new session
     that has neither the UTC time zone nor the temporary tables: wrong, and silently."""
-    con = connect(evicting_server, db_kwargs={"adbc.chargewire.session.reconnect": "true"})
+    con = connect(evicting_server, db_kwargs={"hardcharger.session.reconnect": "true"})
     try:
         con.raw_sql("CREATE TEMP TABLE kept AS SELECT 1 AS a").close()
         assert con.settings["TimeZone"] == "UTC"

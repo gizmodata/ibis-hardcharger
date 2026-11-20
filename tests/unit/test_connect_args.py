@@ -86,13 +86,13 @@ class TestDriverKwargs:
                 "tls_root_certs": "ca.pem",
                 "settings": {"query_timeout": 60},
                 "session_tag": {"app": "etl"},
-                "db_kwargs": {"adbc.chargewire.ipc_compression": "zstd"},
+                "db_kwargs": {"hardcharger.ipc.compression": "zstd"},
             },
         )
         assert kwargs["tls_root_certs"] == "ca.pem"
         assert kwargs["settings"] == {"query_timeout": 60}
         assert kwargs["session_tag"] == {"app": "etl"}
-        assert kwargs["db_kwargs"] == {"adbc.chargewire.ipc_compression": "zstd"}
+        assert kwargs["db_kwargs"] == {"hardcharger.ipc.compression": "zstd"}
 
     def test_the_drivers_own_names_are_accepted(self):
         kwargs = driver_kwargs(
