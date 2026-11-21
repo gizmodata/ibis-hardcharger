@@ -43,7 +43,7 @@ Results come back as Arrow.
 pip install ibis-hardcharger
 ```
 
-Python 3.11 to 3.15. It installs Ibis 12.0, `adbc-driver-hardcharger` 2.5.0 or newer, PyArrow,
+Python 3.11 to 3.15. It installs Ibis 12.0, `adbc-driver-hardcharger` 2.7.0 or newer, PyArrow,
 pandas and DuckDB (which reads client-side files). sqlglot stays at 30.17: Ibis 12.0.0 does not
 work with a newer one (its `drop_table()` sends `DROP TABLE` with no name from sqlglot 30.18 on).
 
@@ -153,10 +153,30 @@ Every other keyword argument goes to the driver's
 
 In a URL, the connection options can be query parameters (`?auth_type=external`);
 percent-encode special characters in the user name and password. A URL is often configuration
-that someone other than the application's author supplies, so it can't do everything a keyword
-argument can: `open_browser` is `true` or `false` there (as a keyword argument it may name the
-command that opens the browser), and `session_id`, `settings`, `db_kwargs`, `conn_kwargs` and
-`uri` are keyword arguments only.
+that someone other than the application's author supplies, and the application acts on it on its
+own machine, so it can't do everything a keyword argument can. A URL's query may set exactly
+`use_encryption` (or `tls`), `disable_certificate_verification`, `tls_skip_verify`,
+`tls_server_name`, `auth_type`, `access_token`, `subject_token`, `oauth_timeout`, `open_browser`
+(`true` or `false`; as a keyword argument it may name the command that opens the browser),
+`share_sign_in` (`false` only; sharing a browser sign-in, `true` or a name, is a keyword
+argument), `resume_timeout`, `session_tag`, `query_tag`, `user`/`username`, `password`,
+`database`/`catalog` and `schema`/`db_schema`. Everything else is a keyword argument only, in
+particular `profile` (a connection profile on this machine, with the credentials in it),
+`tls_root_certs`, `tls_client_cert` and `tls_client_key` (files on this machine), `session_id`,
+`settings`, `db_kwargs`, `conn_kwargs` and `uri`. A URL with such an option is refused; give it
+next to the URL instead:
+
+```python
+import ibis
+
+# tls_client_cert= and tls_client_key= (with auth_type="client_certificate") go the same way
+con = ibis.connect("hardcharger://hardcharger:change-me@localhost:31338", tls_root_certs="ca.pem")
+print(con.con.current_user())
+```
+
+```text
+hardcharger
+```
 
 A server whose certificate comes from your own certificate authority:
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.metadata
+import io
 import tomllib
 from pathlib import Path
 
@@ -92,7 +94,7 @@ def test_do_connect_hands_the_driver_its_arguments(mocker):
             database="lake",
             disable_certificate_verification=True,
             tls_server_name="db.internal",
-            db_kwargs={"adbc.chargewire.ipc_compression": "zstd"},
+            db_kwargs={"hardcharger.ipc.compression": "zstd"},
         )
     connect.assert_called_once_with(
         uri="hardcharger://db.example.com",
@@ -103,8 +105,8 @@ def test_do_connect_hands_the_driver_its_arguments(mocker):
         tls_skip_verify=True,
         tls_server_name="db.internal",
         db_kwargs={
-            "adbc.chargewire.ipc_compression": "zstd",
-            "adbc.chargewire.session.reconnect": "false",
+            "hardcharger.ipc.compression": "zstd",
+            "hardcharger.session.reconnect": "false",
         },
     )
 
@@ -118,6 +120,48 @@ def test_session_replacement_can_be_turned_back_on(mocker):
     )
     with pytest.raises(Stop):
         ibis.hardcharger.connect(
-            host="db.example.com", db_kwargs={"adbc.chargewire.session.reconnect": "true"}
+            host="db.example.com", db_kwargs={"hardcharger.session.reconnect": "true"}
         )
-    assert connect.call_args.kwargs["db_kwargs"] == {"adbc.chargewire.session.reconnect": "true"}
+    assert connect.call_args.kwargs["db_kwargs"] == {"hardcharger.session.reconnect": "true"}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "hardcharger.session.reconnect",
+        "chargewire.session.reconnect",
+        "adbc.chargewire.session.reconnect",
+        "adbc.warp.session.reconnect",
+    ],
+)
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_the_callers_session_replacement_choice_is_sent_under_one_name_only(mocker, name, value):
+    """Under any name the driver reads: the default is never added beside it under another
+    name, where the driver would take one of the two values, not necessarily the caller's."""
+
+    class Stop(Exception):
+        pass
+
+    connect = mocker.patch.object(
+        target=ibis_hardcharger.hardcharger, attribute="connect", side_effect=Stop
+    )
+    with pytest.raises(Stop):
+        ibis.hardcharger.connect(host="db.example.com", db_kwargs={name: value})
+    assert connect.call_args.kwargs["db_kwargs"] == {name: value}
+
+
+def test_the_option_names_are_the_drivers_current_ones():
+    """adbc-driver-hardcharger 2.7.0 names: no deprecation line from the driver."""
+    from adbc_driver_hardcharger import _legacy
+
+    for name in (
+        *ibis_hardcharger._ORDERED_INGEST,
+        ibis_hardcharger._SESSION_RECONNECT,
+    ):
+        assert _legacy.current_key(key=name) == (name, 0)
+    # every spelling in the list is one the driver reads as that option
+    with contextlib.redirect_stderr(new_target=io.StringIO()):
+        for name in ibis_hardcharger._SESSION_RECONNECT_NAMES:
+            assert _legacy.current_key(key=name)[0] == "hardcharger.session.reconnect"
+    assert ibis_hardcharger._ORDERED_INGEST == {"hardcharger.ingest.parts": "1"}
+    assert ibis_hardcharger._SESSION_RECONNECT == "hardcharger.session.reconnect"

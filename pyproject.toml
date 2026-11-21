@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "ibis-hardcharger"
 # The one place the version lives: ibis_hardcharger.__version__ reads the installed metadata,
 # and CI checks that a release tag and CHANGELOG.md agree with it (scripts/check_version.py).
-version = "1.0.1"
+version = "1.1.0"
 description = "Ibis backend for Hardcharger™, GizmoData's DuckDB 2.0 server, over the Chargewire protocol"
 readme = "README.md"
 license = "Apache-2.0"
@@ -48,7 +48,7 @@ dependencies = [
     # drop_view() send "DROP TABLE" with no name, on every Ibis SQL backend. 30.17.0 is the
     # newest sqlglot Ibis 12.0.0 works with. Lift the cap when Ibis supports a newer one.
     "sqlglot>=30.17.0,<30.18",
-    "adbc-driver-hardcharger>=2.5.0,<3",
+    "adbc-driver-hardcharger>=2.7.0,<3",
     "pyarrow>=26.0.1",
     "pyarrow-hotfix>=0.7",
     # Reads client-side files (read_csv, read_parquet, read_json) before they are bulk-loaded.

@@ -81,18 +81,17 @@ _URL_CONVERTERS = {
 
 
 # What a URL's query may set. A URL is often configuration that someone other than the
-# application's author supplies, so it can choose among these and nothing else: it can't name a
-# program to run (the driver runs open_browser's text as a command during browser sign-in, so
-# from a URL it is true or false only), adopt another session, or pass driver options through.
-# Everything the driver's connect() takes remains available as a keyword argument, in code.
+# application's author supplies, and the application acts on it on its own machine, so it can
+# choose among these and nothing else: it can't name a program to run (the driver runs
+# open_browser's text as a command during browser sign-in, so from a URL it is true or false
+# only), load this machine's connection profile or read its files (_CODE_ONLY), join a shared
+# browser sign-in (share_sign_in is false only), adopt another session, or pass driver options
+# through. Everything the driver's connect() takes remains available as a keyword argument.
 _URL_QUERY_OPTIONS = frozenset(
     {
         "use_encryption",
         "disable_certificate_verification",
         "tls_skip_verify",
-        "tls_root_certs",
-        "tls_client_cert",
-        "tls_client_key",
         "tls_server_name",
         "auth_type",
         "access_token",
@@ -103,7 +102,6 @@ _URL_QUERY_OPTIONS = frozenset(
         "resume_timeout",
         "session_tag",
         "query_tag",
-        "profile",
         "user",
         "username",
         "password",
@@ -113,6 +111,16 @@ _URL_QUERY_OPTIONS = frozenset(
         "db_schema",
     }
 )
+
+
+# Keyword arguments a URL can't set, and why: each uses something on the machine that runs the
+# application, whoever wrote the URL.
+_CODE_ONLY = {
+    "profile": "it loads a connection profile from this machine, with the credentials in it",
+    "tls_root_certs": "it reads a file on this machine",
+    "tls_client_cert": "it reads a file on this machine",
+    "tls_client_key": "it reads a file on this machine",
+}
 
 
 def build_uri(*, host: str, port: int | None = None, use_encryption: bool = True) -> str:
@@ -220,6 +228,11 @@ def kwargs_from_url(url: ParseResult, kwargs: Mapping[str, Any]) -> dict[str, An
             "a hardcharger:// URL needs a host: hardcharger://[user[:password]@]host[:port]"
         )
     in_query = {_URL_ALIASES.get(name, name) for name, _ in parse_qsl(url.query)}
+    for name in sorted(in_query.intersection(_CODE_ONLY)):
+        raise ValueError(
+            f"{name} can't be set in a URL ({_CODE_ONLY[name]}): pass it as a keyword argument "
+            "to ibis.connect() or connect()"
+        )
     refused = sorted(in_query - _URL_QUERY_OPTIONS)
     if refused:
         raise ValueError(
@@ -235,6 +248,11 @@ def kwargs_from_url(url: ParseResult, kwargs: Mapping[str, Any]) -> dict[str, An
         if name == "open_browser" and name in in_query:
             converter = _to_bool  # from a URL: a flag, never a command
         out[name] = converter(name, value) if converter is not None else value
+        if name == "share_sign_in" and name in in_query and out[name] is not False:
+            raise ValueError(
+                "share_sign_in can only be false in a URL: sharing a browser sign-in (true or a "
+                "name) is a keyword argument"
+            )
 
     path = [unquote(part) for part in url.path.strip("/").split("/")] if url.path else []
     path = [part for part in path if part]
